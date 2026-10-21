@@ -71,12 +71,12 @@ jobs:
       - name: Dashboard screenshots
         continue-on-error: true
         run: |
-          npx -y playwright@1.49.1 install --with-deps chromium
           mkdir -p screenshots
-          # the first page load is slow while Grafana warms up: load it once and throw it away
-          npx -y playwright@1.49.1 screenshot --wait-for-timeout 30000 "http://localhost:3000/login" /tmp/warmup.png
+          # the bundled headless Chromium cannot run the Grafana 12 UI; use the runner's Google Chrome
+          npx -y playwright@1.49.1 screenshot --channel chrome --wait-for-timeout 20000 \
+            "http://localhost:3000/login" /tmp/warmup.png
           for uid in http-service linux-hosts otel-pipeline; do
-            npx -y playwright@1.49.1 screenshot --viewport-size "1600, 1100" --wait-for-timeout 25000 \
+            npx -y playwright@1.49.1 screenshot --channel chrome --viewport-size "1600, 1100" --wait-for-timeout 20000 \
               "http://localhost:3000/d/$uid?orgId=1&from=now-15m&to=now&kiosk" "screenshots/$uid.png"
           done
       - uses: actions/upload-artifact@v6
