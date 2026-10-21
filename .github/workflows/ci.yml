@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell scripts
+        run: shellcheck scripts/*.sh
+      - name: Python scripts
+        run: python3 -m py_compile scripts/*.py
+      - name: Dashboards are valid JSON
+        run: for f in grafana/dashboards/*.json; do python3 -m json.tool "$f" > /dev/null || exit 1; done
+      - name: Compose file
+        run: docker compose config --quiet
+
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Collector configurations
+        run: |
+          for config in agent gateway; do
+            docker run --rm -v "$PWD/otel:/otel:ro" otel/opentelemetry-collector-contrib:0.135.0 \
+              validate --config=/otel/$config.yaml
+          done
+      - name: Prometheus configuration and rules
+        run: |
+          docker run --rm -v "$PWD/prometheus:/p:ro" --entrypoint promtool prom/prometheus:v3.5.0 \
+            check config /p/prometheus.yml
+      - name: Alert rule unit tests
+        run: |
+          docker run --rm -v "$PWD/prometheus:/p:ro" --entrypoint promtool prom/prometheus:v3.5.0 \
+            test rules /p/tests/helpdesk.test.yml
+
+  install-script:
+    # installs the agent with systemd on a real Ubuntu machine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dry run
+        run: bash scripts/install-otel-agent.sh --gateway gateway.example.org:4317 --dry-run
+      - name: Install
+        run: sudo bash scripts/install-otel-agent.sh --gateway localhost:4317 --environment ci
+      - name: Service is running
+        run: |
+          systemctl is-active otelcol-contrib
+          curl -fsS http://localhost:13133/
+      - name: Second run changes nothing
+        run: sudo bash scripts/install-otel-agent.sh --gateway localhost:4317 --environment ci
+      - name: Agent logs
+        if: always()
+        run: sudo journalctl -u otelcol-contrib --no-pager -n 50
+
+  integration:
+    needs: [lint, validate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start the stack
+        run: docker compose up -d --build --wait --wait-timeout 300
+      - name: Generate traffic
+        run: python3 scripts/generate_traffic.py --duration 90 --rate 5 &
+      - name: Smoke test
+        run: bash scripts/smoke-test.sh
+      - name: Dashboard screenshots
+        continue-on-error: true
+        run: |
+          sleep 30
+          npx -y playwright@1.49.1 install --with-deps chromium
+          mkdir -p screenshots
+          for uid in http-service linux-hosts otel-pipeline; do
+            npx -y playwright@1.49.1 screenshot --viewport-size "1600, 1100" --wait-for-timeout 8000 \
+              "http://localhost:3000/d/$uid?orgId=1&from=now-15m&to=now&kiosk" "screenshots/$uid.png"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dashboard-screenshots
+          path: screenshots/
+          if-no-files-found: ignore
+      - name: Logs
+        if: failure()
+        run: docker compose logs --no-color --tail 100
+      - name: Stop
+        if: always()
+        run: docker compose down -v
