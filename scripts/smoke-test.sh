@@ -62,6 +62,11 @@ grafana_datasource_ok() {
         jq -e '.status == "OK"'
 }
 
+# Tempo has no backend health check in Grafana: call Tempo through Grafana's proxy instead
+grafana_reaches() {
+    curl -fsS -u "$GRAFANA_USER:$GRAFANA_PASSWORD" "$GRAFANA_URL/api/datasources/proxy/uid/$1$2"
+}
+
 echo "Application"
 eventually "API answers on $API_URL/health" curl -fsS "$API_URL/health"
 
@@ -79,7 +84,7 @@ echo "Grafana"
 eventually "Grafana is up" curl -fsS "$GRAFANA_URL/api/health"
 eventually "dashboards provisioned" grafana_dashboards
 eventually "Prometheus data source works" grafana_datasource_ok prometheus
-eventually "Tempo data source works" grafana_datasource_ok tempo
+eventually "Grafana reaches Tempo" grafana_reaches tempo /api/echo
 
 echo
 if ((failures > 0)); then

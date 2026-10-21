@@ -32,7 +32,7 @@ class Client:
     def __init__(self, base_url: str, api_key: str) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
-        self.statuses: Counter[int] = Counter()
+        self.statuses: Counter[int | str] = Counter()
 
     def call(self, method: str, path: str, body: dict | None = None) -> dict | None:
         data = json.dumps(body).encode() if body is not None else None
@@ -46,7 +46,21 @@ class Client:
                 return json.loads(payload) if payload else None
         except urllib.error.HTTPError as error:
             self.statuses[error.code] += 1
-            return None
+        except (urllib.error.URLError, ConnectionError, TimeoutError):
+            # the API restarting or not reachable: count it and keep going
+            self.statuses["no answer"] += 1
+        return None
+
+    def wait_until_ready(self, timeout: float) -> None:
+        """The container can be "running" a few seconds before uvicorn accepts connections."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                with urllib.request.urlopen(self.base_url + "/health", timeout=2):
+                    return
+            except (urllib.error.URLError, ConnectionError, TimeoutError):
+                time.sleep(1)
+        raise SystemExit(f"{self.base_url} did not answer within {timeout:.0f}s")
 
 
 def run(client: Client, duration: float, rate: float) -> None:
@@ -100,8 +114,9 @@ def main() -> None:
     args = parser.parse_args()
 
     client = Client(args.url, args.api_key)
+    client.wait_until_ready(timeout=120)
     run(client, args.duration, args.rate)
-    summary = ", ".join(f"{code}: {n}" for code, n in sorted(client.statuses.items()))
+    summary = ", ".join(f"{code}: {n}" for code, n in sorted(client.statuses.items(), key=str))
     print(f"sent {sum(client.statuses.values())} requests ({summary})")
 
 

@@ -9,7 +9,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Shell scripts
         run: shellcheck scripts/*.sh
       - name: Python scripts
@@ -22,7 +22,7 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Collector configurations
         run: |
           for config in agent gateway; do
@@ -42,7 +42,7 @@ jobs:
     # installs the agent with systemd on a real Ubuntu machine
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Dry run
         run: bash scripts/install-otel-agent.sh --gateway gateway.example.org:4317 --dry-run
       - name: Install
@@ -61,7 +61,7 @@ jobs:
     needs: [lint, validate]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Start the stack
         run: docker compose up -d --build --wait --wait-timeout 300
       - name: Generate traffic
@@ -78,7 +78,7 @@ jobs:
             npx -y playwright@1.49.1 screenshot --viewport-size "1600, 1100" --wait-for-timeout 8000 \
               "http://localhost:3000/d/$uid?orgId=1&from=now-15m&to=now&kiosk" "screenshots/$uid.png"
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: dashboard-screenshots
