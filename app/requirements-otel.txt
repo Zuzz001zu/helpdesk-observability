@@ -1,0 +1,7 @@
+# OpenTelemetry for a FastAPI + SQLAlchemy + psycopg application.
+# Versions of the SDK (1.x) and the instrumentations (0.x b0) are released together.
+opentelemetry-distro==0.65b0
+opentelemetry-exporter-otlp-proto-grpc==1.44.0
+opentelemetry-instrumentation-fastapi==0.65b0
+opentelemetry-instrumentation-sqlalchemy==0.65b0
+opentelemetry-instrumentation-psycopg==0.65b0
