@@ -1,0 +1,6 @@
+.env
+__pycache__/
+screenshots/
+.idea/
+.vscode/
+.DS_Store
