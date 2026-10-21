@@ -2,8 +2,8 @@
 
 [![CI](https://github.com/Zuzz001zu/helpdesk-observability/actions/workflows/ci.yml/badge.svg)](https://github.com/Zuzz001zu/helpdesk-observability/actions/workflows/ci.yml)
 
-A small but complete observability platform built on **OpenTelemetry, Prometheus, Tempo and
-Grafana**, and the onboarding of one real application into it:
+A small but complete observability platform built on **OpenTelemetry, Prometheus, Tempo,
+Loki and Grafana**, and the onboarding of one real application into it:
 [helpdesk-api](https://github.com/Zuzz001zu/helpdesk-api), a FastAPI service, instrumented
 **without changing its code**.
 
@@ -24,17 +24,20 @@ flowchart LR
     agent -- "OTLP" --> gateway["OTel Collector<br/>gateway"]
     gateway -- "metrics<br/>(scraped)" --> prometheus[(Prometheus<br/>+ alert rules)]
     gateway -- "traces" --> tempo[(Tempo)]
+    gateway -- "logs" --> loki[(Loki)]
     prometheus --> grafana["Grafana<br/>dashboards"]
     tempo --> grafana
+    loki --> grafana
 ```
 
 | Component | Role | Configuration |
 |---|---|---|
 | helpdesk-api | the application, built from its own repository plus the OpenTelemetry packages | [`app/`](app) |
 | Collector agent | one per server: receives OTLP from local apps, collects CPU/memory/disk/network, adds host attributes | [`otel/agent.yaml`](otel/agent.yaml) |
-| Collector gateway | central: batching, memory limits, routing metrics to Prometheus and traces to Tempo | [`otel/gateway.yaml`](otel/gateway.yaml) |
+| Collector gateway | central: batching, memory limits, routing metrics to Prometheus, traces to Tempo, logs to Loki | [`otel/gateway.yaml`](otel/gateway.yaml) |
 | Prometheus | metrics storage, recording rules, alerts | [`prometheus/`](prometheus) |
 | Tempo | traces | [`tempo/tempo.yaml`](tempo/tempo.yaml) |
+| Loki | logs, received over OTLP, with the trace id of each request | [`loki/loki.yaml`](loki/loki.yaml) |
 | Grafana | three provisioned dashboards, data sources as code | [`grafana/`](grafana) |
 
 ## Quick start
@@ -61,7 +64,7 @@ onboarded service, not only this one.
 
 - **HTTP service overview**: requests per second, 5xx and 4xx ratios, latency percentiles,
   traffic and p95 per route, slowest routes, recent traces with errors (from Tempo),
-  requests in progress, database connection pool.
+  requests in progress, database connection pool, log volume by severity and the logs themselves.
 - **Linux hosts**: CPU, memory, load, disk usage per mount point, network traffic.
 - **Telemetry pipeline**: the collectors themselves: data received vs sent, export failures,
   queue usage. When this dashboard is wrong, all the others are.
@@ -121,6 +124,8 @@ CI runs it on a real Ubuntu machine and checks that the service is up and health
   the names the dashboards and alerts rely on.
 - **Labels kept small.** Resource attributes become Prometheus labels; SDK attributes that
   are the same on every series are dropped in the gateway, health checks are not traced.
+- **Signals are linked.** Every log line keeps the `trace_id` of its request: from a log line
+  Grafana opens the trace in Tempo, and from a span it opens the matching log lines in Loki.
 - **Collectors watch themselves.** Their internal metrics are scraped, and a pipeline that
   stops sending data raises an alert instead of silently producing empty dashboards.
 
@@ -141,12 +146,13 @@ CI runs it on a real Ubuntu machine and checks that the service is up and health
 | OpenTelemetry Python | SDK 1.44.0, instrumentation 0.65b0 |
 | Prometheus | 3.5.0 (LTS) |
 | Tempo | 2.8.1 |
+| Loki | 3.5.3 |
 | Grafana | 12.1.0 |
 
 ## Limits of this setup
 
-It is a working model, not a production deployment: Tempo and Prometheus run as single
-instances with local storage, and the collectors talk to each other without TLS. In
+It is a working model, not a production deployment: Tempo, Loki and Prometheus run as
+single instances with local storage, and the collectors talk to each other without TLS. In
 production the gateway would be behind a load balancer with TLS, and the long-term metric
 storage would be decided with the platform team.
 
@@ -157,6 +163,7 @@ app/              Dockerfile and OpenTelemetry packages for the helpdesk API
 otel/             collector configurations (agent, gateway)
 prometheus/       scrape config, recording and alert rules, rule tests
 tempo/            Tempo configuration
+loki/             Loki configuration
 grafana/          data sources, dashboard provider, dashboards (JSON)
 scripts/          agent installation, traffic generator, smoke test
 docs/             onboarding checklist, alert runbook

@@ -22,10 +22,12 @@ RUN pip install --no-cache-dir -r requirements-app.txt -r requirements-otel.txt
 COPY --from=source /src/alembic.ini .
 COPY --from=source /src/alembic ./alembic
 COPY --from=source /src/app ./app
+COPY log-config.json .
 
 RUN useradd --create-home appuser
 USER appuser
 EXPOSE 8000
 
-# opentelemetry-instrument wraps the normal start command
-CMD ["sh", "-c", "alembic upgrade head && opentelemetry-instrument uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+# opentelemetry-instrument wraps the normal start command. The log configuration lets
+# uvicorn's access log reach the root logger, where OpenTelemetry picks it up.
+CMD ["sh", "-c", "alembic upgrade head && opentelemetry-instrument uvicorn app.main:app --host 0.0.0.0 --port 8000 --log-config log-config.json"]

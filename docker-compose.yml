@@ -1,10 +1,11 @@
 # Local observability platform: one instrumented application, an agent, a gateway,
-# Prometheus, Tempo and Grafana.  docker compose up -d --build
+# Prometheus, Tempo, Loki and Grafana.  docker compose up -d --build
 #
 #   API         http://localhost:8000/docs
 #   Grafana     http://localhost:3000     (anonymous viewer, admin/admin to edit)
 #   Prometheus  http://localhost:9090
 #   Tempo       http://localhost:3200
+#   Loki        http://localhost:3100
 
 name: helpdesk-observability
 
@@ -41,7 +42,8 @@ services:
       OTEL_EXPORTER_OTLP_PROTOCOL: grpc
       OTEL_TRACES_EXPORTER: otlp
       OTEL_METRICS_EXPORTER: otlp
-      OTEL_LOGS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: otlp
+      OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED: "true"
       OTEL_METRIC_EXPORT_INTERVAL: "15000"
       OTEL_SEMCONV_STABILITY_OPT_IN: http
       OTEL_PYTHON_FASTAPI_EXCLUDED_URLS: health
@@ -75,10 +77,12 @@ services:
     command: ["--config=/etc/otelcol/gateway.yaml"]
     environment:
       TEMPO_ENDPOINT: tempo:4317
+      LOKI_ENDPOINT: http://loki:3100/otlp
     volumes:
       - ./otel/gateway.yaml:/etc/otelcol/gateway.yaml:ro
     depends_on:
       - tempo
+      - loki
 
   prometheus:
     <<: *restart
@@ -105,6 +109,16 @@ services:
     ports:
       - "3200:3200"
 
+  loki:
+    <<: *restart
+    image: grafana/loki:3.5.3
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    volumes:
+      - ./loki/loki.yaml:/etc/loki/loki.yaml:ro
+      - loki-data:/loki
+    ports:
+      - "3100:3100"
+
   grafana:
     <<: *restart
     image: grafana/grafana:12.1.0
@@ -122,6 +136,8 @@ services:
     depends_on:
       - prometheus
       - tempo
+      - loki
 
 volumes:
   tempo-data:
+  loki-data:
