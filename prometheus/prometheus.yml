@@ -1,0 +1,23 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - rules/*.yml
+
+scrape_configs:
+  # Application and host metrics, as exported by the gateway.
+  # honor_labels keeps the labels set by the collector (service_name, host_name...).
+  - job_name: otel-gateway
+    honor_labels: true
+    static_configs:
+      - targets: ["otel-gateway:8889"]
+
+  # The collectors' own metrics: queues, dropped data, export failures.
+  - job_name: otel-collectors
+    static_configs:
+      - targets: ["otel-agent:8888", "otel-gateway:8888"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

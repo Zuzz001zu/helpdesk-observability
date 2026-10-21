@@ -1,0 +1,179 @@
+# Unit tests for the alert rules: promtool test rules prometheus/tests/helpdesk.test.yml
+rule_files:
+  - ../rules/helpdesk.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: 5xx above 5 % for five minutes fires HighErrorRate
+    interval: 1m
+    input_series:
+      # 10 requests per second, 1 of them failing (10 %)
+      - series: 'http_server_request_duration_seconds_count{service_name="helpdesk-api", http_response_status_code="200"}'
+        values: '0+540x20'
+      - series: 'http_server_request_duration_seconds_count{service_name="helpdesk-api", http_response_status_code="500"}'
+        values: '0+60x20'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: HighErrorRate
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: HighErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service_name: helpdesk-api
+            exp_annotations:
+              summary: "helpdesk-api: 10% of requests fail with 5xx"
+              runbook: docs/alerts.md#higherrorrate
+
+  - name: client errors (4xx) do not count as failures
+    interval: 1m
+    input_series:
+      - series: 'http_server_request_duration_seconds_count{service_name="helpdesk-api", http_response_status_code="200"}'
+        values: '0+300x20'
+      - series: 'http_server_request_duration_seconds_count{service_name="helpdesk-api", http_response_status_code="404"}'
+        values: '0+300x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: HighErrorRate
+        exp_alerts: []
+
+  - name: a service with almost no traffic does not page
+    interval: 1m
+    input_series:
+      # one request per minute, half of them failing
+      - series: 'http_server_request_duration_seconds_count{service_name="batch-job", http_response_status_code="200"}'
+        values: '0+1x20'
+      - series: 'http_server_request_duration_seconds_count{service_name="batch-job", http_response_status_code="503"}'
+        values: '0+1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: HighErrorRate
+        exp_alerts: []
+
+  - name: p95 above 500 ms fires HighLatency after 10 minutes
+    interval: 1m
+    input_series:
+      # every request takes between 0.5 s and 1 s
+      - series: 'http_server_request_duration_seconds_bucket{service_name="helpdesk-api", le="0.25"}'
+        values: '0+0x30'
+      - series: 'http_server_request_duration_seconds_bucket{service_name="helpdesk-api", le="0.5"}'
+        values: '0+0x30'
+      - series: 'http_server_request_duration_seconds_bucket{service_name="helpdesk-api", le="1"}'
+        values: '0+60x30'
+      - series: 'http_server_request_duration_seconds_bucket{service_name="helpdesk-api", le="+Inf"}'
+        values: '0+60x30'
+    promql_expr_test:
+      - expr: service:http_request_duration_seconds:p95_5m
+        eval_time: 10m
+        exp_samples:
+          - labels: 'service:http_request_duration_seconds:p95_5m{service_name="helpdesk-api"}'
+            value: 0.975
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: HighLatency
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: HighLatency
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service_name: helpdesk-api
+            exp_annotations:
+              summary: "helpdesk-api: p95 latency is 975ms"
+              runbook: docs/alerts.md#highlatency
+
+  - name: collector that cannot be scraped fires TelemetryPipelineDown
+    interval: 1m
+    input_series:
+      - series: 'up{job="otel-collectors", instance="otel-agent:8888"}'
+        values: '1 1 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: TelemetryPipelineDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: TelemetryPipelineDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: otel-collectors
+              instance: otel-agent:8888
+            exp_annotations:
+              summary: "otel-agent:8888 cannot be scraped: telemetry from the servers is not arriving"
+              runbook: docs/alerts.md#telemetrypipelinedown
+
+  - name: failed exports fire CollectorExportFailing for metrics too
+    interval: 1m
+    input_series:
+      - series: 'otelcol_exporter_send_failed_metric_points_total{instance="otel-gateway:8888", exporter="prometheusremotewrite"}'
+        values: '0+100x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: CollectorExportFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: otel-gateway:8888
+              exporter: prometheusremotewrite
+            exp_annotations:
+              summary: "otel-gateway:8888: exporter prometheusremotewrite is dropping data"
+              runbook: docs/alerts.md#collectorexportfailing
+
+  - name: an exporter that sends both signals is reported once
+    interval: 1m
+    input_series:
+      - series: 'otelcol_exporter_send_failed_spans_total{instance="otel-agent:8888", exporter="otlp/gateway"}'
+        values: '0+10x15'
+      - series: 'otelcol_exporter_send_failed_metric_points_total{instance="otel-agent:8888", exporter="otlp/gateway"}'
+        values: '0+10x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: CollectorExportFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: otel-agent:8888
+              exporter: otlp/gateway
+            exp_annotations:
+              summary: "otel-agent:8888: exporter otlp/gateway is dropping data"
+              runbook: docs/alerts.md#collectorexportfailing
+
+  - name: full read-only mounts are ignored, full writable disks are not
+    interval: 1m
+    input_series:
+      - series: 'system_filesystem_utilization_ratio{host_name="app-01", mountpoint="/", mode="rw"}'
+        values: '0.9x30'
+      - series: 'system_filesystem_utilization_ratio{host_name="app-01", mountpoint="/snap/core", mode="ro"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: HostDiskAlmostFull
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              host_name: app-01
+              mountpoint: /
+            exp_annotations:
+              summary: "app-01: / is 90% full"
+              runbook: docs/alerts.md#hostdiskalmostfull
+
+  - name: memory above 90 % fires HostMemoryHigh
+    interval: 1m
+    input_series:
+      - series: 'system_memory_utilization_ratio{host_name="app-01", state="used"}'
+        values: '0.95x20'
+      - series: 'system_memory_utilization_ratio{host_name="app-01", state="free"}'
+        values: '0.05x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: HostMemoryHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              host_name: app-01
+              state: used
+            exp_annotations:
+              summary: "app-01: 95% of memory used"
+              runbook: docs/alerts.md#hostmemoryhigh

@@ -1,0 +1,87 @@
+# Recording rules and alerts for HTTP services instrumented with OpenTelemetry.
+# Metric and label names follow the OpenTelemetry HTTP semantic conventions as
+# exported by the collector: http_server_request_duration_seconds{service_name, http_route,...}
+
+groups:
+  - name: http-recording
+    rules:
+      - record: service:http_requests:rate5m
+        expr: sum by (service_name) (rate(http_server_request_duration_seconds_count[5m]))
+
+      - record: service:http_server_errors:ratio_rate5m
+        expr: |
+          sum by (service_name) (rate(http_server_request_duration_seconds_count{http_response_status_code=~"5.."}[5m]))
+            /
+          sum by (service_name) (rate(http_server_request_duration_seconds_count[5m]))
+
+      - record: service:http_request_duration_seconds:p95_5m
+        expr: |
+          histogram_quantile(0.95,
+            sum by (service_name, le) (rate(http_server_request_duration_seconds_bucket[5m])))
+
+  - name: http-alerts
+    rules:
+      - alert: HighErrorRate
+        # ignore services with almost no traffic, where two failed requests would be 100 %
+        expr: service:http_server_errors:ratio_rate5m > 0.05 and service:http_requests:rate5m > 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.service_name }}: {{ $value | humanizePercentage }} of requests fail with 5xx"
+          runbook: docs/alerts.md#higherrorrate
+
+      - alert: HighLatency
+        expr: service:http_request_duration_seconds:p95_5m > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service_name }}: p95 latency is {{ $value | humanizeDuration }}"
+          runbook: docs/alerts.md#highlatency
+
+  - name: pipeline-alerts
+    rules:
+      - alert: TelemetryPipelineDown
+        expr: up{job=~"otel-gateway|otel-collectors"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} cannot be scraped: telemetry from the servers is not arriving"
+          runbook: docs/alerts.md#telemetrypipelinedown
+
+      - alert: CollectorExportFailing
+        # "or" rather than "+": an exporter usually sends only one signal, and "+" would
+        # silently drop it when the other counter does not exist
+        expr: |
+          (sum by (instance, exporter) (rate(otelcol_exporter_send_failed_spans_total[5m])) > 0)
+          or
+          (sum by (instance, exporter) (rate(otelcol_exporter_send_failed_metric_points_total[5m])) > 0)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }}: exporter {{ $labels.exporter }} is dropping data"
+          runbook: docs/alerts.md#collectorexportfailing
+
+  - name: host-alerts
+    rules:
+      - alert: HostMemoryHigh
+        expr: system_memory_utilization_ratio{state="used"} > 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host_name }}: {{ $value | humanizePercentage }} of memory used"
+          runbook: docs/alerts.md#hostmemoryhigh
+
+      - alert: HostDiskAlmostFull
+        # read-only mounts (images, snapshots) are full by design
+        expr: sum by (host_name, mountpoint) (system_filesystem_utilization_ratio{mode="rw"}) > 0.85
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host_name }}: {{ $labels.mountpoint }} is {{ $value | humanizePercentage }} full"
+          runbook: docs/alerts.md#hostdiskalmostfull
