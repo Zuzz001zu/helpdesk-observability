@@ -1,0 +1,98 @@
+# OpenTelemetry Collector running on every Linux server ("agent").
+#
+# - receives OTLP from the applications on the same host
+# - collects host metrics (CPU, memory, disks, network)
+# - adds host and environment attributes
+# - forwards everything to the central gateway
+#
+# The same file is used by docker-compose and by scripts/install-otel-agent.sh.
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  hostmetrics:
+    collection_interval: 30s
+    # "/" on a server; "/hostfs" when the agent runs in a container with the host mounted
+    root_path: ${env:HOST_ROOT_PATH:-/}
+    scrapers:
+      cpu:
+        metrics:
+          system.cpu.utilization:
+            enabled: true
+      memory:
+        metrics:
+          system.memory.utilization:
+            enabled: true
+      load:
+      network:
+      filesystem:
+        metrics:
+          system.filesystem.utilization:
+            enabled: true
+        exclude_fs_types:
+          match_type: strict
+          fs_types: [autofs, binfmt_misc, bpf, cgroup, cgroup2, configfs, debugfs, devpts, devtmpfs,
+                     fusectl, hugetlbfs, mqueue, nsfs, overlay, proc, procfs, pstore, rpc_pipefs,
+                     securityfs, selinuxfs, squashfs, sysfs, tmpfs, tracefs]
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 20
+
+  resourcedetection:
+    detectors: [env, system]
+    system:
+      hostname_sources: [os]
+
+  # Applications may set their own environment; the agent only fills it in when missing.
+  resource/environment:
+    attributes:
+      - key: deployment.environment.name
+        value: ${env:DEPLOYMENT_ENVIRONMENT:-demo}
+        action: insert
+
+  batch:
+    timeout: 5s
+
+exporters:
+  otlp/gateway:
+    endpoint: ${env:OTEL_GATEWAY_ENDPOINT:-localhost:4317}
+    tls:
+      insecure: true
+    sending_queue:
+      enabled: true
+      queue_size: 5000
+    retry_on_failure:
+      enabled: true
+      max_elapsed_time: 10m
+
+service:
+  extensions: [health_check]
+  telemetry:
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, resource/environment, batch]
+      exporters: [otlp/gateway]
+    metrics:
+      receivers: [otlp, hostmetrics]
+      processors: [memory_limiter, resourcedetection, resource/environment, batch]
+      exporters: [otlp/gateway]
