@@ -1,0 +1,127 @@
+# Local observability platform: one instrumented application, an agent, a gateway,
+# Prometheus, Tempo and Grafana.  docker compose up -d --build
+#
+#   API         http://localhost:8000/docs
+#   Grafana     http://localhost:3000     (anonymous viewer, admin/admin to edit)
+#   Prometheus  http://localhost:9090
+#   Tempo       http://localhost:3200
+
+name: helpdesk-observability
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  db:
+    <<: *restart
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: helpdesk
+      POSTGRES_PASSWORD: helpdesk
+      POSTGRES_DB: helpdesk
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U helpdesk"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  helpdesk-api:
+    <<: *restart
+    build:
+      context: ./app
+      args:
+        HELPDESK_REF: ${HELPDESK_REF:-main}
+    environment:
+      DATABASE_URL: postgresql+psycopg://helpdesk:helpdesk@db:5432/helpdesk
+      API_KEY: ${API_KEY:-change-me}
+      # everything OpenTelemetry needs is configuration, not code
+      OTEL_SERVICE_NAME: helpdesk-api
+      OTEL_RESOURCE_ATTRIBUTES: service.version=1.1.0,deployment.environment.name=demo
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-agent:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_METRICS_EXPORTER: otlp
+      OTEL_LOGS_EXPORTER: none
+      OTEL_METRIC_EXPORT_INTERVAL: "15000"
+      OTEL_SEMCONV_STABILITY_OPT_IN: http
+      OTEL_PYTHON_FASTAPI_EXCLUDED_URLS: health
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      otel-agent:
+        condition: service_started
+
+  # In production one agent runs on every server (scripts/install-otel-agent.sh).
+  otel-agent:
+    <<: *restart
+    image: otel/opentelemetry-collector-contrib:0.135.0
+    hostname: demo-server
+    command: ["--config=/etc/otelcol/agent.yaml"]
+    environment:
+      OTEL_GATEWAY_ENDPOINT: otel-gateway:4317
+      DEPLOYMENT_ENVIRONMENT: demo
+      HOST_ROOT_PATH: /hostfs
+    volumes:
+      - ./otel/agent.yaml:/etc/otelcol/agent.yaml:ro
+      - /:/hostfs:ro
+    depends_on:
+      - otel-gateway
+
+  otel-gateway:
+    <<: *restart
+    image: otel/opentelemetry-collector-contrib:0.135.0
+    command: ["--config=/etc/otelcol/gateway.yaml"]
+    environment:
+      TEMPO_ENDPOINT: tempo:4317
+    volumes:
+      - ./otel/gateway.yaml:/etc/otelcol/gateway.yaml:ro
+    depends_on:
+      - tempo
+
+  prometheus:
+    <<: *restart
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+    ports:
+      - "9090:9090"
+
+  tempo:
+    <<: *restart
+    image: grafana/tempo:2.8.1
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    # the named volume is created as root; simpler than fixing ownership for a demo
+    user: "0"
+    volumes:
+      - ./tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "3200:3200"
+
+  grafana:
+    <<: *restart
+    image: grafana/grafana:12.1.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_DEFAULT_THEME: light
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/http-service.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - tempo
+
+volumes:
+  tempo-data:
