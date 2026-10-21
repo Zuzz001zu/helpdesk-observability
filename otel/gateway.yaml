@@ -1,7 +1,7 @@
 # Central OpenTelemetry Collector ("gateway").
 #
 # Receives OTLP from the agents and sends each signal to its backend:
-# metrics are exposed for Prometheus, traces go to Tempo.
+# metrics are exposed for Prometheus, traces go to Tempo, logs go to Loki.
 
 extensions:
   health_check:
@@ -49,6 +49,10 @@ exporters:
     tls:
       insecure: true
 
+  # Loki 3 accepts OTLP natively; service.name and a few resource attributes become labels
+  otlphttp/loki:
+    endpoint: ${env:LOKI_ENDPOINT:-http://localhost:3100/otlp}
+
 service:
   extensions: [health_check]
   telemetry:
@@ -68,3 +72,7 @@ service:
       receivers: [otlp]
       processors: [memory_limiter, batch]
       exporters: [otlp/tempo]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/loki]

@@ -11,6 +11,7 @@ set -euo pipefail
 API_URL=${API_URL:-http://localhost:8000}
 PROMETHEUS_URL=${PROMETHEUS_URL:-http://localhost:9090}
 TEMPO_URL=${TEMPO_URL:-http://localhost:3200}
+LOKI_URL=${LOKI_URL:-http://localhost:3100}
 GRAFANA_URL=${GRAFANA_URL:-http://localhost:3000}
 GRAFANA_USER=${GRAFANA_USER:-admin}
 GRAFANA_PASSWORD=${GRAFANA_PASSWORD:-admin}
@@ -49,6 +50,18 @@ tempo_has_traces() {
         jq -e '.traces | length > 0'
 }
 
+loki_has_logs() {
+    curl -fsS --get "$LOKI_URL/loki/api/v1/query_range" \
+        --data-urlencode "query={service_name=\"$SERVICE\"}" --data-urlencode "limit=5" |
+        jq -e '.data.result | length > 0'
+}
+
+loki_logs_have_trace_ids() {
+    curl -fsS --get "$LOKI_URL/loki/api/v1/query_range" \
+        --data-urlencode "query={service_name=\"$SERVICE\"} | trace_id != \"\"" --data-urlencode "limit=5" |
+        jq -e '.data.result | length > 0'
+}
+
 prometheus_has_rule() {
     curl -fsS "$PROMETHEUS_URL/api/v1/rules" | jq -e --arg name "$1" '[.data.groups[].rules[].name] | index($name)'
 }
@@ -80,11 +93,16 @@ eventually "alert rules loaded" prometheus_has_rule HighErrorRate
 echo "Traces"
 eventually "traces of $SERVICE in Tempo" tempo_has_traces
 
+echo "Logs"
+eventually "logs of $SERVICE in Loki" loki_has_logs
+eventually "log lines carry the trace id" loki_logs_have_trace_ids
+
 echo "Grafana"
 eventually "Grafana is up" curl -fsS "$GRAFANA_URL/api/health"
 eventually "dashboards provisioned" grafana_dashboards
 eventually "Prometheus data source works" grafana_datasource_ok prometheus
 eventually "Grafana reaches Tempo" grafana_reaches tempo /api/echo
+eventually "Grafana reaches Loki" grafana_reaches loki /loki/api/v1/labels
 
 echo
 if ((failures > 0)); then

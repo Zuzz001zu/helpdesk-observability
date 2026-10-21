@@ -1,6 +1,6 @@
 # OpenTelemetry Collector running on every Linux server ("agent").
 #
-# - receives OTLP from the applications on the same host
+# - receives OTLP (traces, metrics, logs) from the applications on the same host
 # - collects host metrics (CPU, memory, disks, network)
 # - adds host and environment attributes
 # - forwards everything to the central gateway
@@ -94,5 +94,9 @@ service:
       exporters: [otlp/gateway]
     metrics:
       receivers: [otlp, hostmetrics]
+      processors: [memory_limiter, resourcedetection, resource/environment, batch]
+      exporters: [otlp/gateway]
+    logs:
+      receivers: [otlp]
       processors: [memory_limiter, resourcedetection, resource/environment, batch]
       exporters: [otlp/gateway]

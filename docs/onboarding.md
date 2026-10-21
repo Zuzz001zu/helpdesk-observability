@@ -38,6 +38,8 @@ OTEL_RESOURCE_ATTRIBUTES=service.version=1.1.0,deployment.environment.name=produ
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317   # the agent on the same server
 OTEL_SEMCONV_STABILITY_OPT_IN=http                   # stable HTTP metric names
 OTEL_PYTHON_FASTAPI_EXCLUDED_URLS=health             # health checks are noise
+OTEL_LOGS_EXPORTER=otlp                              # logs through the same agent
+OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=true
 ```
 
 The server needs the agent: `sudo bash scripts/install-otel-agent.sh --gateway <gateway>:4317 --environment production`.
@@ -53,13 +55,14 @@ Run each query in Prometheus (or Grafana Explore) after a few minutes of traffic
 | Environment is set | `count by (deployment_environment_name) (target_info{job="helpdesk-api"})` | one value |
 | Host metrics | `system_memory_utilization_ratio{host_name="app-01"}` | present |
 | Traces | Tempo: `{resource.service.name="helpdesk-api"}` | recent traces with database spans |
+| Logs | Loki: `{service_name="helpdesk-api"} \| trace_id != ""` | log lines linked to their trace |
 
 Cardinality: no user ids, ticket ids or e-mail addresses in labels. Check with
 `count({service_name="helpdesk-api"})` before and after onboarding.
 
 ## 5. Done when
 
-- [ ] metrics, traces and host metrics visible in the dashboards *HTTP service overview* and *Linux hosts*
+- [ ] metrics, traces, logs and host metrics visible in the dashboards *HTTP service overview* and *Linux hosts*
 - [ ] alerts `HighErrorRate` and `HighLatency` apply to the service (they work for any `service_name`)
 - [ ] thresholds agreed with the team if the defaults (5 % errors, 500 ms p95) do not fit
 - [ ] owner and runbook link recorded in the ticket
